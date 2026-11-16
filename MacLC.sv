@@ -82,6 +82,8 @@ module emu
 		"P2OCD,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 
 		"P3SC2,NVR,PRAM image;",
+		"P3-;",
+		"P3OE,Swap Alt/Win keys,No,Yes;",
 		"V,v",`BUILD_DATE
 	};
 
@@ -195,6 +197,12 @@ module emu
 	wire        ioctl_write;
 	reg         ioctl_wait = 0;
 	wire [10:0] ps2_key;
+	// "Swap Alt/Win keys": Alt gives Option and the Windows keys Command
+	// (Mac labelling) instead of the positional PlusToo default.
+	wire [8:0]  key_sc = ps2_key[8:0];
+	wire [10:0] ps2_key_m = {ps2_key[10:9], !status[14] ? key_sc :
+	                         key_sc == 9'h011 ? 9'h11F : key_sc == 9'h111 ? 9'h127 :
+	                         key_sc == 9'h11F ? 9'h011 : key_sc == 9'h127 ? 9'h111 : key_sc};
 	wire [24:0] ps2_mouse;
 	wire        capslock;
 
@@ -1270,7 +1278,7 @@ module emu
 		.selectUnmapped(selectUnmapped),
 		
 		// peripherals
-		.ps2_key(ps2_key), 
+		.ps2_key(ps2_key_m),
 		.capslock(capslock),
 		.ps2_mouse(ps2_mouse),
 		// serial uart
