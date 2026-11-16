@@ -56,23 +56,32 @@ module emu
 	`include "build_id.v"
 	localparam CONF_STR = {
 		"MacLCii;UART57600:115200;",
+		// Layout follows MacLC_MiSTer (computer-core OSD standard). Status
+		// bits are unchanged from the flat layout, so saved .CFG files apply.
+		"SC0,IMGVHDHDA,Pri. disk (ID 6);",
+		"SC1,IMGVHDHDA,Disk (ID 5);",
+		"F1,DSKIMG,Floppy 1;",
+		"F2,DSKIMG,Floppy 2;",
 		"-;",
-		"F1,DSKIMG,Mount Pri Floppy;",
-		"F2,DSKIMG,Mount Sec Floppy;",
+		"O23,Memory,4 MB,2 MB,10 MB;",
 		"-;",
-		"SC0,IMGVHDHDA,Mount SCSI-6;",
-		"SC1,IMGVHDHDA,Mount SCSI-5;",
-		"SC2,NVR,Mount PRAM;",
+		"P1,Machine;",
+		"P2,Video;",
+		"P3,Advanced;",
 		"-;",
-		"O78,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-		"OCD,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
-		"OA,Monitor,640x480 VGA,512x384 12in RGB;",
-		"-;",
-		"O23,Memory,4MB,2MB,10MB;",
-		"-;",
-		"R5,Interrupt (NMI / MacsBug);",
-		"R6,Reset PRAM & Core;",
-		"R0,Reset & Apply CPU+Memory;",
+		"h0-,Changes pending;",
+		"R0,Apply and reset;",
+
+		"P1R5,Interrupt (NMI);",
+		"P1-;",
+		"P1R6,Clear PRAM and reset;",
+
+		// Aspect ratio and scale only steer the scaler, so they act at once.
+		"P2OA,Monitor,640x480 VGA,512x384 12in;",
+		"P2O78,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+		"P2OCD,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
+
+		"P3SC2,NVR,PRAM image;",
 		"V,v",`BUILD_DATE
 	};
 
@@ -107,7 +116,6 @@ module emu
 	reg rom_loaded = 1'b0;
 	always @(posedge clk_sys) if (dio_download && dio_index == 0) rom_loaded <= 1'b1;
 
-	reg [1:0] status_mem = 2'b00;        // latched memory selection (status[3:2])
 	localparam [1:0] status_cpu = 2'b10; // 68020
 	reg       n_reset = 0;
 	reg       pram_force_reset = 1'b0;  // "Reset PRAM & Core" -> system reset pulse
@@ -134,13 +142,21 @@ module emu
 			end
 			else if(rst_cnt) begin
 				rst_cnt    <= rst_cnt - 1'd1;
-				status_mem <= status[3:2];
 			end
 			else begin
 				n_reset <= 1;
 			end
 		end
 	end
+
+	// Machine settings apply only while reset is asserted (OSD standard).
+	// Saved configs still apply on first load: the HPS delivers status while
+	// n_reset is held. Aspect ratio and scale stay live on status.
+	reg [31:0] cfg = 0;
+	always @(posedge clk_sys) if (~n_reset) cfg <= status;
+	// Settings that wait for reset: memory (3:2) and monitor (10).
+	localparam [31:0] CFG_MASK = 32'h0000040C;
+	wire osd_pending = |((status ^ cfg) & CFG_MASK);
 
 	///////////////////////////////////////////////////
 
@@ -346,6 +362,7 @@ module emu
 
 		.buttons(buttons),
 		.status(status),
+		.status_menumask({15'd0, osd_pending}),
 
 		.sd_lba(sd_lba),
 		.sd_rd(sd_rd),
@@ -401,14 +418,14 @@ module emu
 	//   Bit 5 = Motherboard bank B (0=4MB, 1=2MB)
 	//   Bit 2 = Always set on read (handled in pseudovia)
 	// The Mac LC II solders 4MB (bank B, bit5=0); MAME's maclc2 sets baseram_is_4M.
-	// Supported menu configs (status[3:2]):
+	// Supported menu configs (cfg[3:2]):
 	//   4MB  = $04  (4MB board, no SIMM)            <- LC II base / default
 	//   2MB  = $24  (2MB board, no SIMM)            <- 2MB-board fallback
 	//   10MB = $E4  (2MB board used + 8MB SIMM)     <- bank B forced to 2MB (MAME)
 	// NOTE: the 10MB path is not yet verified against MAME (-ramsize 10M); only
 	// the base configs are exercised. See docs and addrController_top.v.
-	wire [7:0] configRAMSize = (status[3:2] == 2'b00) ? 8'h04 :  // 4MB (LC II base)
-	                           (status[3:2] == 2'b01) ? 8'h24 :  // 2MB
+	wire [7:0] configRAMSize = (cfg[3:2] == 2'b00) ? 8'h04 :  // 4MB (LC II base)
+	                           (cfg[3:2] == 2'b01) ? 8'h24 :  // 2MB
 	                                                    8'hE4;   // 10MB
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 	wire       pvia_ram_configured;   // ROM has programmed V8 RAM config ($0 mirror enable)
@@ -866,7 +883,7 @@ module emu
 	// Monitor ID Selection — OSD-selectable between 640x480 VGA (default,
 	// MAME-faithful) and 512x384 12" RGB. Portrait is not supported. This is
 	// the sense ID the ROM reads to pick V8 timing.
-	wire [3:0] v8_monitor_id = status[10] ? 4'h2 :  // 512x384 12" RGB
+	wire [3:0] v8_monitor_id = cfg[10] ? 4'h2 :  // 512x384 12" RGB
 	                                         4'h6;   // 640x480 VGA (default)
 
 	ariel_ramdac ariel(
